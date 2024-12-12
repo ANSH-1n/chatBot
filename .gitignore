@@ -1,3 +1,6 @@
+
+
+
 # Ignore virtual environment
 venv/
 
@@ -10,3 +13,6 @@ __pycache__/
 
 # Ignore temporary files
 .DS_Store
+
+# Ignore secrets file from git history but still have it locally
+secrets.toml
