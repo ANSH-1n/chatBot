@@ -572,14 +572,16 @@
 
 
 
-
-
-
+import os
 import streamlit as st
+from dotenv import load_dotenv
 import google.generativeai as gen_ai
 import pandas as pd
 import plotly.express as px
 
+
+# Load environment variables
+load_dotenv()
 
 # Configure Streamlit page settings
 st.set_page_config(
@@ -589,103 +591,71 @@ st.set_page_config(
 )
 
 # Set up Google Gemini-Pro AI model safely
-try:
-    # Access the secrets from Streamlit Cloud secrets manager
-    GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
-    gen_ai.configure(api_key=GOOGLE_API_KEY)
-    model = gen_ai.GenerativeModel("gemini-pro")
-except KeyError:
-    st.error("Google API key is missing from Streamlit secrets.")
-    model = None
-except Exception as e:
-    st.error(f"Failed to initialize AI model. Error: {e}")
-    model = None
+GOOGLE_API_KEY = st.secrets.get("GOOGLE_API_KEY")  # Fetch from Streamlit secrets directly
 
-# Initialize chat session only if `model` is successfully created
-if model:
-    if "chat_session" not in st.session_state:
-        try:
-            st.session_state.chat_session = model.start_chat(history=[])
-        except Exception as e:
-            st.error(f"Could not initialize chat session. Error: {e}")
-            st.session_state.chat_session = None
+if not GOOGLE_API_KEY:
+    st.error("Google API key is missing from Streamlit secrets. Please add it there.")
+    st.stop()  # Stop execution if key is missing
 else:
-    st.error("Model could not initialize. Ensure the API key is set correctly.")
+    try:
+        gen_ai.configure(api_key=GOOGLE_API_KEY)
+        model = gen_ai.GenerativeModel("gemini-pro")
+    except Exception as e:
+        st.error(f"Failed to initialize AI model with provided API key: {e}")
+        st.stop()
 
-# Initialize DataFrame to log chat history
+
+# Function to translate roles safely
+def translate_role_for_streamlit(user_role):
+    if user_role == "model":
+        return "assistant"
+    else:
+        return user_role
+
+
+# Initialize a safe chat session
+if "chat_session" not in st.session_state:
+    try:
+        st.session_state.chat_session = model.start_chat(history=[])
+    except Exception as e:
+        st.error(f"Error initializing chat session: {e}")
+        st.stop()
+
+
+# Initialize logging structure if absent
 if "user_logs" not in st.session_state:
     st.session_state.user_logs = pd.DataFrame(columns=["timestamp", "user_input", "assistant_response"])
 
-# Styling with custom CSS
-st.markdown(
-    """
-    <style>
-    /* General body styles */
-    body {
-        font-family: 'Arial', sans-serif;
-        background: linear-gradient(to right, #e0eafc, #cfdef3);
-        margin: 0;
-    }
 
-    /* Header styles */
-    .header {
-        text-align: center;
-        color: #4CAF50;
-        font-size: 2em;
-        font-weight: bold;
-        margin-bottom: 10px;
-    }
+# Display the chat history safely
+st.subheader("💬 Chat History")
+chat_container = st.container()
+with chat_container:
+    try:
+        # Ensure chat history is only fetched if valid session is initialized
+        if st.session_state.chat_session and st.session_state.chat_session.history:
+            for message in st.session_state.chat_session.history:
+                role_class = "assistant-msg" if message.role == "model" else "user-msg"
+                st.markdown(
+                    f'<div class="{role_class}">{message.parts[0].text}</div>',
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.warning("No chat session history found.")
+    except AttributeError as e:
+        st.error(f"Error accessing history: {e}")
 
-    /* Styled assistant message */
-    .assistant-msg {
-        background-color: #f0f8ff;
-        border-radius: 8px;
-        padding: 10px;
-        box-shadow: 1px 1px 5px rgba(0, 0, 0, 0.2);
-        margin-bottom: 5px;
-    }
 
-    /* User message bubble */
-    .user-msg {
-        background-color: #d1e7dd;
-        border-radius: 8px;
-        padding: 10px;
-        box-shadow: 1px 1px 5px rgba(0, 0, 0, 0.2);
-        margin-bottom: 5px;
-        text-align: right;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-# Display the chatbot's styled header
-st.markdown('<div class="header">🤖 Gemini Pro - ChatBot</div>', unsafe_allow_html=True)
-
-if st.session_state.chat_session:
-    # Display the chat history
-    st.subheader("💬 Chat History")
-    chat_container = st.container()
-    with chat_container:
-        for message in st.session_state.chat_session.history:
-            role_class = "assistant-msg" if message.role == "model" else "user-msg"
-            st.markdown(
-                f'<div class="{role_class}">{message.parts[0].text}</div>',
-                unsafe_allow_html=True,
-            )
-else:
-    st.warning("No active session. Please send a message to initialize the session.")
-
-# Input area with user-friendly design
+# Input area design
 st.subheader("💭 Your Message")
 user_prompt = st.text_input(
-    "Type your message below:", 
-    key="user_input", 
+    "Type your message below:",
+    key="user_input",
     placeholder="Type your thoughts here..."
 )
 
-# Handle user input & send it
-if user_prompt and st.session_state.chat_session:
+# Process the user input safely
+if user_prompt:
     with st.chat_message("user"):
         st.markdown(
             f'<div class="user-msg">{user_prompt}</div>',
@@ -693,9 +663,10 @@ if user_prompt and st.session_state.chat_session:
         )
 
     try:
+        # Send the user's prompt to the model safely
         gemini_response = st.session_state.chat_session.send_message(user_prompt)
 
-        # Log user interaction into DataFrame
+        # Log response
         timestamp = pd.Timestamp.now()
         new_log = pd.DataFrame({
             "timestamp": [timestamp],
@@ -704,22 +675,29 @@ if user_prompt and st.session_state.chat_session:
         })
         st.session_state.user_logs = pd.concat([st.session_state.user_logs, new_log], ignore_index=True)
 
-        # Render the response from Gemini-Pro in a styled way
+        # Display assistant response safely
         with st.chat_message("assistant"):
             st.markdown(
                 f'<div class="assistant-msg">{gemini_response.text}</div>',
                 unsafe_allow_html=True,
             )
     except Exception as e:
-        st.error(f"Failed to send the message to the AI model: {e}")
-else:
-    if not st.session_state.chat_session:
-        st.info("Waiting to initialize the session. Make sure the API is set up properly.")
+        st.error(f"Failed to send message to AI model: {e}")
 
-# Allow users to download logs as CSV
+# Analytics Section
+st.subheader("📊 Analytics & Logs")
+if len(st.session_state.user_logs) > 0:
+    if st.button("Show User Logs"):
+        st.write("User logs for interactions:")
+        st.dataframe(st.session_state.user_logs)
+
 st.download_button(
     label="Download Chat Logs as CSV",
     data=st.session_state.user_logs.to_csv(index=False).encode('utf-8'),
     file_name="user_logs.csv",
     mime="text/csv",
 )
+
+
+
+
