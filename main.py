@@ -574,6 +574,7 @@
 
 
 
+
 import streamlit as st
 import google.generativeai as gen_ai
 import pandas as pd
@@ -589,25 +590,27 @@ st.set_page_config(
 
 # Set up Google Gemini-Pro AI model safely
 try:
-    # Directly use secrets from Streamlit's secrets manager
-    gen_ai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+    # Access the secrets from Streamlit Cloud secrets manager
+    GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
+    gen_ai.configure(api_key=GOOGLE_API_KEY)
     model = gen_ai.GenerativeModel("gemini-pro")
-    
-    # Initialize chat session in Streamlit if not already present
-    if "chat_session" not in st.session_state:
-        st.session_state.chat_session = model.start_chat(history=[])
 except KeyError:
     st.error("Google API key is missing from Streamlit secrets.")
+    model = None
 except Exception as e:
-    st.error(f"Error initializing AI model: {e}")
+    st.error(f"Failed to initialize AI model. Error: {e}")
+    model = None
 
-# Function to translate roles between Gemini-Pro and Streamlit terminology
-def translate_role_for_streamlit(user_role):
-    if user_role == "model":
-        return "assistant"
-    else:
-        return user_role
-
+# Initialize chat session only if `model` is successfully created
+if model:
+    if "chat_session" not in st.session_state:
+        try:
+            st.session_state.chat_session = model.start_chat(history=[])
+        except Exception as e:
+            st.error(f"Could not initialize chat session. Error: {e}")
+            st.session_state.chat_session = None
+else:
+    st.error("Model could not initialize. Ensure the API key is set correctly.")
 
 # Initialize DataFrame to log chat history
 if "user_logs" not in st.session_state:
@@ -659,16 +662,19 @@ st.markdown(
 # Display the chatbot's styled header
 st.markdown('<div class="header">🤖 Gemini Pro - ChatBot</div>', unsafe_allow_html=True)
 
-# Display the chat history
-st.subheader("💬 Chat History")
-chat_container = st.container()
-with chat_container:
-    for message in st.session_state.chat_session.history:
-        role_class = "assistant-msg" if message.role == "model" else "user-msg"
-        st.markdown(
-            f'<div class="{role_class}">{message.parts[0].text}</div>',
-            unsafe_allow_html=True,
-        )
+if st.session_state.chat_session:
+    # Display the chat history
+    st.subheader("💬 Chat History")
+    chat_container = st.container()
+    with chat_container:
+        for message in st.session_state.chat_session.history:
+            role_class = "assistant-msg" if message.role == "model" else "user-msg"
+            st.markdown(
+                f'<div class="{role_class}">{message.parts[0].text}</div>',
+                unsafe_allow_html=True,
+            )
+else:
+    st.warning("No active session. Please send a message to initialize the session.")
 
 # Input area with user-friendly design
 st.subheader("💭 Your Message")
@@ -679,7 +685,7 @@ user_prompt = st.text_input(
 )
 
 # Handle user input & send it
-if user_prompt:
+if user_prompt and st.session_state.chat_session:
     with st.chat_message("user"):
         st.markdown(
             f'<div class="user-msg">{user_prompt}</div>',
@@ -687,7 +693,6 @@ if user_prompt:
         )
 
     try:
-        # Send user's message and get a response
         gemini_response = st.session_state.chat_session.send_message(user_prompt)
 
         # Log user interaction into DataFrame
@@ -707,32 +712,9 @@ if user_prompt:
             )
     except Exception as e:
         st.error(f"Failed to send the message to the AI model: {e}")
-
-
-# Data Visualization Section
-st.subheader("📊 Analytics & Logs")
-if len(st.session_state.user_logs) > 0:
-    if st.button("Show User Logs"):
-        st.write("User logs for interactions:")
-        st.dataframe(st.session_state.user_logs)
-
-    # Generate Graphs using Plotly
-    user_logs_plot = st.session_state.user_logs.copy()
-    user_logs_plot["response_length"] = user_logs_plot["assistant_response"].apply(len)  # Log response length
-
-    fig = px.line(
-        user_logs_plot,
-        x="timestamp",
-        y="response_length",
-        title="Assistant Response Length Over Time",
-        labels={"response_length": "Response Length", "timestamp": "Timestamps"},
-        color_discrete_sequence=["blue"]
-    )
-
-    st.plotly_chart(fig)
-
 else:
-    st.write("Interact with the chatbot to generate logs and view insights!")
+    if not st.session_state.chat_session:
+        st.info("Waiting to initialize the session. Make sure the API is set up properly.")
 
 # Allow users to download logs as CSV
 st.download_button(
